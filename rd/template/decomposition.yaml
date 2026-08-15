@@ -1,0 +1,84 @@
+# RD 模板：按应用拆解（decomposition.yaml）
+
+> 路径：复制到 `rd/requirements/{requirementId}/decomposition.yaml`
+> 目标：将复杂需求拆成按应用自包含的子需求，每个应用的 requirement 单独写。
+
+```yaml
+requirement_id: "{requirementId}"
+decompose_date: "YYYY-MM-DD"
+base_analysis: analysis.md       # 依赖的 analysis 文档
+total_applications: N            # 拆解出的应用数
+
+# -------------------------------
+applications:
+  # ===== 应用 1 =====
+  - app: backend
+    module: clue
+    responsibility: "线索模块：重写导出引擎（分页+流式），并新增导出任务中心记录"
+    # 与其他应用的接口契约（必须写清楚，避免联调时对不上）
+    contracts:
+      - name: "导出 API 契约"
+        type: "HTTP REST API"
+        direction: "frontend-web → backend"
+        endpoint: "POST /api/clue/export"
+        request_fields:
+          - name: "options.async"
+            type: "boolean"
+            desc: "true=异步导出（走导出任务中心），false=同步（默认，仅<1W行允许）"
+            default: false
+        response_fields:
+          - name: "taskId"
+            type: "long"
+            desc: "异步时返回导出任务ID，同步时返回 null"
+    # 内部需求点（复制到 application 级 requirement.md）
+    requirements:
+      - id: "B-CLUE-1"
+        title: "导出支持分页+流式写"
+      - id: "B-CLUE-2"
+        title: "超量自动切异步+写入导出任务中心"
+    # 风险 & 测试重点
+    focus_tests:
+      - "10W 行导出内存不超过 512MB"
+      - "异步导出任务成功/失败状态正确"
+    depends_on: []       # 依赖的其他应用（无则空数组）
+
+  # ===== 应用 2 =====
+  - app: frontend-web
+    module: clueManagement
+    responsibility: "列表页导出按钮：新增异步模式提示 + 导出任务中心入口"
+    contracts:
+      - name: "导出 API 契约"
+        ref: "backend.clue.0.contracts.0"   # 引用上面后端的同一条契约
+    requirements:
+      - id: "F-WEB-CLUE-1"
+        title: "导出按钮：数据量 >阈值时自动提示切异步"
+    depends_on:
+      - "backend.clue"   # 前端依赖后端接口，开发顺序后端先
+
+  # ===== 应用 3 =====
+  - app: frontend-mobile
+    responsibility: "移动端不重写导出，仅加量限制提示"
+    note: "移动端暂不支持大导出，仅做友好拦截提示"
+    requirements:
+      - id: "F-MOB-CLUE-1"
+        title: "超过限制时提示请前往 PC 端操作"
+    depends_on: []
+
+# -------------------------------
+# 跨应用公共约束（所有应用必须遵守）
+global_constraints:
+  - "必须遵守 knowledge/main/tech-constraints.md 编码铁律"
+  - "新增写接口必须加 @OperationLog + @CsPermission（仅复用现有节点，不新增）"
+  - "所有改动必须向后兼容旧版调用方（新增字段用默认值）"
+  - "操作日志必须覆盖所有写操作（见 knowledge/main/business-rules.md 第五章）"
+
+# -------------------------------
+# 发布顺序（release-plan 阶段参考）
+release_order:
+  1: backend      # 后端先发（需同时兼容旧前端）
+  2: frontend-web
+  3: frontend-mobile
+
+rollback_plan:
+  hint: "若线上出现严重问题，优先回滚 backend（保留旧前端兼容）"
+```
